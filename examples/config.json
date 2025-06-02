@@ -1,0 +1,41 @@
+{
+  "connections": [
+    {
+      "name": "Local NATS",
+      "url": "nats://localhost:4222",
+      "username": "",
+      "password": ""
+    },
+    {
+      "name": "NATS with Auth",
+      "url": "nats://localhost:4222",
+      "username": "user",
+      "password": "pass"
+    },
+    {
+      "name": "NATS Cloud",
+      "url": "nats://connect.ngs.global:4222",
+      "username": "",
+      "password": ""
+    }
+  ],
+  "subjects": [
+    "test.subject",
+    "events.>",
+    "logs.*",
+    "metrics.cpu",
+    "notifications.email"
+  ],
+  "message_templates": [
+    {
+      "name": "User Event",
+      "subject": "events.user",
+      "body": "{\n  \"event\": \"user_login\",\n  \"user_id\": \"12345\",\n  \"timestamp\": \"2025-01-01T12:00:00Z\"\n}"
+    },
+    {
+      "name": "System Alert",
+      "subject": "alerts.system",
+      "body": "{\n  \"level\": \"warning\",\n  \"message\": \"High CPU usage detected\",\n  \"service\": \"api-server\"\n}"
+    }
+  ]
+} 
