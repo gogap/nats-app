@@ -1,5 +1,7 @@
 # 构建与发布指南
 
+**📖 Languages**: [English](BUILD_EN.md) | [中文](BUILD.md)
+
 本文档说明如何构建和发布NATS Client应用程序。
 
 ## 🔧 开发环境设置

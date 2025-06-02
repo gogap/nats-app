@@ -1,5 +1,7 @@
 # NATS Client - 可视化NATS消息客户端
 
+**📖 Languages / 语言支持**: [English](README_EN.md) | [中文](README.md)
+
 一个现代化的跨平台NATS客户端，提供简洁易用的图形界面，让NATS消息传递变得更加简单。
 
 [![Download](https://img.shields.io/github/downloads/gogap/nats-app/total?style=for-the-badge&logo=github)](https://github.com/gogap/nats-app/releases)
