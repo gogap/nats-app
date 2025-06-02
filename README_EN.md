@@ -34,10 +34,10 @@ Simply double-click the downloaded file to run - no additional dependencies requ
 - **Auto-reconnect**: Automatic reconnection on disconnection
 
 ### 📤 Message Publishing
-- **History Records**: Automatically saves published subjects for quick reuse
-- **Message Editor**: Large-size editor supporting multi-line messages
-- **JSON Formatting**: One-click JSON beautification
-- **Request-Reply**: Support for Request-Reply pattern (coming soon)
+- **History**: Auto-save published subjects for quick reuse
+- **Message Editor**: Large editor supporting multi-line messages
+- **JSON Formatting**: One-click JSON message beautification
+- **Request-Reply**: Support for Request-Reply pattern with configurable timeout
 
 ### 📥 Message Subscription
 - **Pattern Matching**: Support wildcard subscriptions (e.g., `test.*`, `events.>`)
@@ -92,6 +92,16 @@ docker run -p 4222:4222 nats:latest
 3. Click "Subscribe" button
 4. Go back to publish page and send messages - you'll see them in the subscribe page
 
+### 5. Try Request-Reply
+
+1. Go back to "Publish" tab
+2. Switch mode to "Request-Reply"
+3. Enter subject: `test.hello`
+4. Set timeout to: `5s`
+5. Enter message: `Who are you?`
+6. Click "Send" button
+7. Check the response results in the right output area (if there's a service responding)
+
 ## 📖 User Guide
 
 ### Connection Configuration
@@ -106,6 +116,25 @@ Supports multiple connection formats:
 - **JSON Messages**: Paste JSON and click "Format JSON" to beautify
 - **Message Templates**: Common messages are automatically saved in history
 - **Batch Sending**: Quickly select historical subjects for repeated sending
+
+### Request-Reply Usage
+
+1. **Select Mode**: Choose "Request-Reply" from the "Mode" dropdown in the publish page
+2. **Set Timeout**: Set response waiting time in the "Timeout" field (e.g., 5s, 10s, 30s)
+3. **Send Request**: Enter subject and message content, click "Send"
+4. **View Response**: The right output area will display response results or timeout errors
+
+**Timeout Format Examples**:
+- `5s` - 5 seconds
+- `30s` - 30 seconds
+- `1m` - 1 minute
+- `500ms` - 500 milliseconds
+
+**Request-Reply Use Cases**:
+- **API Calls**: Send requests to microservices and wait for responses
+- **Status Queries**: Query system or service status
+- **Data Retrieval**: Get data from remote services
+- **Health Checks**: Check if services are running normally
 
 ### Subscription Pattern Examples
 
