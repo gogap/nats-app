@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1557,8 +1558,7 @@ func createJetStreamControls(client *NATSClient, window fyne.Window) *fyne.Conta
 
 func createJetStreamOutput(client *NATSClient) *fyne.Container {
 	// Streams list
-	var streamsList *widget.List
-	streamsList = widget.NewList(
+	streamsList := widget.NewList(
 		func() int {
 			return len(client.GetStreams())
 		},
@@ -1594,8 +1594,7 @@ func createJetStreamOutput(client *NATSClient) *fyne.Container {
 	)
 
 	// Consumers list
-	var consumersList *widget.List
-	consumersList = widget.NewList(
+	consumersList := widget.NewList(
 		func() int {
 			return len(client.GetConsumers())
 		},
@@ -1701,7 +1700,7 @@ func createJetStreamOutput(client *NATSClient) *fyne.Container {
 func formatBytes(bytes uint64) string {
 	const unit = 1024
 	if bytes < unit {
-		return fmt.Sprintf("%d B", bytes)
+		return strconv.FormatUint(bytes, 10) + " B"
 	}
 	div, exp := int64(unit), 0
 	for n := bytes / unit; n >= unit; n /= unit {
