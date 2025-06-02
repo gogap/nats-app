@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +30,113 @@ var (
 	GoVersion = "unknown"
 )
 
+// AppConfig holds the application configuration
+type AppConfig struct {
+	Version           string   `json:"version"`
+	ConnectionURLs    []string `json:"connection_urls"`
+	SubjectHistory    []string `json:"subject_history"`
+	PatternHistory    []string `json:"pattern_history"`
+	GroupHistory      []string `json:"group_history"`
+	LastConnectionURL string   `json:"last_connection_url"`
+}
+
+// getConfigDir returns the platform-specific configuration directory
+func getConfigDir() (string, error) {
+	var configDir string
+
+	// Try to get user config directory first (available in Go 1.13+)
+	if userConfigDir, err := os.UserConfigDir(); err == nil {
+		configDir = filepath.Join(userConfigDir, "nats-app")
+	} else {
+		// Fallback to home directory with platform-specific paths
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("failed to get home directory: %v", err)
+		}
+
+		// Platform-specific subdirectories using runtime.GOOS
+		switch runtime.GOOS {
+		case "windows":
+			configDir = filepath.Join(homeDir, "AppData", "Roaming", "nats-app")
+		case "darwin":
+			configDir = filepath.Join(homeDir, "Library", "Application Support", "nats-app")
+		default: // Linux and others
+			configDir = filepath.Join(homeDir, ".config", "nats-app")
+		}
+	}
+
+	// Create directory if it doesn't exist
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create config directory: %v", err)
+	}
+
+	return configDir, nil
+}
+
+// loadConfig loads configuration from file
+func loadConfig() *AppConfig {
+	configDir, err := getConfigDir()
+	if err != nil {
+		log.Printf("Failed to get config directory: %v", err)
+		return getDefaultConfig()
+	}
+
+	configFile := filepath.Join(configDir, "config.json")
+
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("Config file not found, using defaults")
+		} else {
+			log.Printf("Failed to read config file: %v", err)
+		}
+		return getDefaultConfig()
+	}
+
+	var config AppConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		log.Printf("Failed to parse config file: %v", err)
+		return getDefaultConfig()
+	}
+
+	return &config
+}
+
+// saveConfig saves configuration to file
+func saveConfig(config *AppConfig) error {
+	configDir, err := getConfigDir()
+	if err != nil {
+		return fmt.Errorf("failed to get config directory: %v", err)
+	}
+
+	configFile := filepath.Join(configDir, "config.json")
+
+	config.Version = Version
+
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %v", err)
+	}
+
+	if err := os.WriteFile(configFile, data, 0644); err != nil {
+		return fmt.Errorf("failed to write config file: %v", err)
+	}
+
+	return nil
+}
+
+// getDefaultConfig returns default configuration
+func getDefaultConfig() *AppConfig {
+	return &AppConfig{
+		Version:           Version,
+		ConnectionURLs:    []string{"nats://localhost:4222"},
+		SubjectHistory:    []string{},
+		PatternHistory:    []string{"test.*", "events.>", "logs.*", "metrics.*"},
+		GroupHistory:      []string{"workers", "processors", "analytics"},
+		LastConnectionURL: "nats://localhost:4222",
+	}
+}
+
 // NATSClient represents a NATS client with GUI bindings
 type NATSClient struct {
 	conn          *nats.Conn
@@ -38,8 +148,10 @@ type NATSClient struct {
 	allMessages   []string
 	filter        string
 	// JetStream data
-	streams       []jetstream.StreamInfo
-	consumers     []ConsumerInfo
+	streams   []jetstream.StreamInfo
+	consumers []ConsumerInfo
+	// Configuration
+	config        *AppConfig
 	mu            sync.RWMutex
 	refreshJSFunc func()
 }
@@ -56,12 +168,15 @@ func NewNATSClient() *NATSClient {
 	status := binding.NewString()
 	status.Set("Disconnected")
 
+	config := loadConfig()
+
 	return &NATSClient{
 		status:        status,
 		messageCount:  binding.NewInt(),
 		subscriptions: make(map[string]*nats.Subscription),
 		messages:      binding.NewStringList(),
 		allMessages:   make([]string, 0),
+		config:        config,
 	}
 }
 
@@ -139,8 +254,13 @@ func (nc *NATSClient) Publish(subject, message string) error {
 	return nc.conn.Publish(subject, []byte(message))
 }
 
-// Subscribe subscribes to messages on the specified subject
+// Subscribe subscribes to messages on the specified subject with optional group
 func (nc *NATSClient) Subscribe(subject string) error {
+	return nc.SubscribeWithGroup(subject, "")
+}
+
+// SubscribeWithGroup subscribes to messages on the specified subject with group
+func (nc *NATSClient) SubscribeWithGroup(subject, group string) error {
 	if nc.conn == nil {
 		return fmt.Errorf("not connected")
 	}
@@ -148,48 +268,72 @@ func (nc *NATSClient) Subscribe(subject string) error {
 	nc.mu.Lock()
 	defer nc.mu.Unlock()
 
-	// Check if already subscribed
-	if _, exists := nc.subscriptions[subject]; exists {
-		return fmt.Errorf("already subscribed to %s", subject)
+	// Create unique key for subscription (subject + group)
+	subKey := subject
+	if group != "" {
+		subKey = fmt.Sprintf("%s@%s", subject, group)
 	}
 
-	sub, err := nc.conn.Subscribe(subject, func(msg *nats.Msg) {
-		timestamp := time.Now().Format("15:04:05")
-		formattedMsg := fmt.Sprintf("[%s] %s: %s", timestamp, msg.Subject, string(msg.Data))
+	// Check if already subscribed
+	if _, exists := nc.subscriptions[subKey]; exists {
+		return fmt.Errorf("already subscribed to %s", subKey)
+	}
 
-		nc.mu.Lock()
-		// Add to all messages
-		nc.allMessages = append(nc.allMessages, formattedMsg)
+	var sub *nats.Subscription
+	var err error
 
-		// Limit to 100 messages
-		if len(nc.allMessages) > 100 {
-			nc.allMessages = nc.allMessages[1:]
-		}
-
-		// Apply filter and update display
-		nc.applyFilterLocked()
-		nc.mu.Unlock()
-	})
+	if group != "" {
+		// Subscribe with group (queue subscription)
+		sub, err = nc.conn.QueueSubscribe(subject, group, func(msg *nats.Msg) {
+			timestamp := time.Now().Format("15:04:05")
+			formattedMsg := fmt.Sprintf("[%s] %s@%s: %s", timestamp, msg.Subject, group, string(msg.Data))
+			nc.addMessage(formattedMsg)
+		})
+	} else {
+		// Regular subscription
+		sub, err = nc.conn.Subscribe(subject, func(msg *nats.Msg) {
+			timestamp := time.Now().Format("15:04:05")
+			formattedMsg := fmt.Sprintf("[%s] %s: %s", timestamp, msg.Subject, string(msg.Data))
+			nc.addMessage(formattedMsg)
+		})
+	}
 
 	if err != nil {
 		return err
 	}
 
-	nc.subscriptions[subject] = sub
+	nc.subscriptions[subKey] = sub
 	return nil
 }
 
-// Unsubscribe removes subscription from the specified subject
-func (nc *NATSClient) Unsubscribe(subject string) error {
+// addMessage is a helper to add message to the list thread-safely
+func (nc *NATSClient) addMessage(formattedMsg string) {
 	nc.mu.Lock()
 	defer nc.mu.Unlock()
 
-	if sub, exists := nc.subscriptions[subject]; exists {
+	// Add to all messages
+	nc.allMessages = append(nc.allMessages, formattedMsg)
+
+	// Limit to 100 messages
+	if len(nc.allMessages) > 100 {
+		nc.allMessages = nc.allMessages[1:]
+	}
+
+	// Apply filter and update display
+	nc.applyFilterLocked()
+}
+
+// Unsubscribe removes subscription from the specified subject
+func (nc *NATSClient) Unsubscribe(subKey string) error {
+	nc.mu.Lock()
+	defer nc.mu.Unlock()
+
+	if sub, exists := nc.subscriptions[subKey]; exists {
 		err := sub.Unsubscribe()
 		if err != nil {
 			return err
 		}
-		delete(nc.subscriptions, subject)
+		delete(nc.subscriptions, subKey)
 	}
 	return nil
 }
@@ -200,8 +344,8 @@ func (nc *NATSClient) GetSubscriptions() []string {
 	defer nc.mu.RUnlock()
 
 	subjects := make([]string, 0, len(nc.subscriptions))
-	for subject := range nc.subscriptions {
-		subjects = append(subjects, subject)
+	for subKey := range nc.subscriptions {
+		subjects = append(subjects, subKey)
 	}
 	return subjects
 }
@@ -298,6 +442,128 @@ func (nc *NATSClient) GetConsumers() []ConsumerInfo {
 	return nc.consumers
 }
 
+// addToHistory adds an item to history list with deduplication and limits to 15 items
+func (nc *NATSClient) addToHistory(history *[]string, item string) {
+	if item == "" {
+		return
+	}
+
+	// Remove item if it already exists
+	for i, existing := range *history {
+		if existing == item {
+			*history = append((*history)[:i], (*history)[i+1:]...)
+			break
+		}
+	}
+
+	// Add to front
+	*history = append([]string{item}, *history...)
+
+	// Limit to 15 items
+	if len(*history) > 15 {
+		*history = (*history)[:15]
+	}
+}
+
+// AddSubjectHistory adds a subject to publish/subscribe history
+func (nc *NATSClient) AddSubjectHistory(subject string) {
+	nc.mu.Lock()
+	defer nc.mu.Unlock()
+	nc.addToHistory(&nc.config.SubjectHistory, subject)
+
+	// Save configuration asynchronously
+	go func() {
+		if err := saveConfig(nc.config); err != nil {
+			log.Printf("Failed to save config: %v", err)
+		}
+	}()
+}
+
+// AddPatternHistory adds a pattern to subscription history
+func (nc *NATSClient) AddPatternHistory(pattern string) {
+	nc.mu.Lock()
+	defer nc.mu.Unlock()
+	nc.addToHistory(&nc.config.PatternHistory, pattern)
+
+	// Save configuration asynchronously
+	go func() {
+		if err := saveConfig(nc.config); err != nil {
+			log.Printf("Failed to save config: %v", err)
+		}
+	}()
+}
+
+// AddGroupHistory adds a group to subscription history
+func (nc *NATSClient) AddGroupHistory(group string) {
+	nc.mu.Lock()
+	defer nc.mu.Unlock()
+	nc.addToHistory(&nc.config.GroupHistory, group)
+
+	// Save configuration asynchronously
+	go func() {
+		if err := saveConfig(nc.config); err != nil {
+			log.Printf("Failed to save config: %v", err)
+		}
+	}()
+}
+
+// AddConnectionHistory adds a connection URL to history
+func (nc *NATSClient) AddConnectionHistory(url string) {
+	nc.mu.Lock()
+	defer nc.mu.Unlock()
+	nc.addToHistory(&nc.config.ConnectionURLs, url)
+	nc.config.LastConnectionURL = url
+
+	// Save configuration asynchronously
+	go func() {
+		if err := saveConfig(nc.config); err != nil {
+			log.Printf("Failed to save config: %v", err)
+		}
+	}()
+}
+
+// GetSubjectHistory returns current subject history
+func (nc *NATSClient) GetSubjectHistory() []string {
+	nc.mu.RLock()
+	defer nc.mu.RUnlock()
+	return append([]string{}, nc.config.SubjectHistory...)
+}
+
+// GetPatternHistory returns current pattern history
+func (nc *NATSClient) GetPatternHistory() []string {
+	nc.mu.RLock()
+	defer nc.mu.RUnlock()
+	return append([]string{}, nc.config.PatternHistory...)
+}
+
+// GetGroupHistory returns current group history
+func (nc *NATSClient) GetGroupHistory() []string {
+	nc.mu.RLock()
+	defer nc.mu.RUnlock()
+	return append([]string{}, nc.config.GroupHistory...)
+}
+
+// GetConnectionHistory returns current connection URL history
+func (nc *NATSClient) GetConnectionHistory() []string {
+	nc.mu.RLock()
+	defer nc.mu.RUnlock()
+	return append([]string{}, nc.config.ConnectionURLs...)
+}
+
+// GetLastConnectionURL returns the last used connection URL
+func (nc *NATSClient) GetLastConnectionURL() string {
+	nc.mu.RLock()
+	defer nc.mu.RUnlock()
+	return nc.config.LastConnectionURL
+}
+
+// SaveConfiguration saves the current configuration to disk
+func (nc *NATSClient) SaveConfiguration() error {
+	nc.mu.RLock()
+	defer nc.mu.RUnlock()
+	return saveConfig(nc.config)
+}
+
 func main() {
 	myApp := app.New()
 	myApp.SetIcon(theme.ComputerIcon())
@@ -313,6 +579,11 @@ func main() {
 
 	// Handle window close
 	myWindow.SetCloseIntercept(func() {
+		// Save configuration before exit
+		if err := client.SaveConfiguration(); err != nil {
+			log.Printf("Failed to save configuration on exit: %v", err)
+		}
+
 		client.Disconnect()
 		myApp.Quit()
 	})
@@ -361,9 +632,9 @@ func createMainMenu(window fyne.Window) *fyne.MainMenu {
 }
 
 func createConnectionArea(client *NATSClient, window fyne.Window) *fyne.Container {
-	// URL entry with authentication support
-	urlEntry := widget.NewEntry()
-	urlEntry.SetText("nats://localhost:4222")
+	// URL entry with authentication support and history
+	urlEntry := widget.NewSelectEntry(client.GetConnectionHistory())
+	urlEntry.SetText(client.GetLastConnectionURL())
 	urlEntry.SetPlaceHolder("NATS Server URL (supports nats://user:pass@host:port)")
 
 	// Connection status indicator
@@ -371,7 +642,19 @@ func createConnectionArea(client *NATSClient, window fyne.Window) *fyne.Containe
 	statusLabel.Bind(client.status)
 
 	connectBtn := widget.NewButton("Connect", func() {
-		err := client.Connect(urlEntry.Text, "", "") // No separate user/pass
+		url := urlEntry.Text
+		if url == "" {
+			dialog.ShowError(fmt.Errorf("connection URL cannot be empty"), window)
+			return
+		}
+
+		// Add to connection history before connecting
+		client.AddConnectionHistory(url)
+
+		// Update dropdown options
+		urlEntry.SetOptions(client.GetConnectionHistory())
+
+		err := client.Connect(url, "", "") // No separate user/pass
 		if err != nil {
 			dialog.ShowError(err, window)
 		} else {
@@ -413,7 +696,7 @@ func createPublishTabWithOutput(client *NATSClient, window fyne.Window) *fyne.Co
 
 func createPublishControls(client *NATSClient, window fyne.Window) *fyne.Container {
 	// === Message Configuration Group ===
-	subjectEntry := widget.NewEntry()
+	subjectEntry := widget.NewSelectEntry(client.GetSubjectHistory())
 	subjectEntry.SetPlaceHolder("Subject (e.g., test.subject)")
 
 	// Request timeout entry for request-reply
@@ -494,6 +777,12 @@ func createPublishControls(client *NATSClient, window fyne.Window) *fyne.Contain
 			return
 		}
 
+		// Add to history before publishing
+		client.AddSubjectHistory(subjectEntry.Text)
+
+		// Update the dropdown options
+		subjectEntry.SetOptions(client.GetSubjectHistory())
+
 		if modeSelect.Selected == "Request-Reply" {
 			// TODO: Implement request-reply functionality
 			dialog.ShowInformation("Info", "Request-reply mode coming soon!", window)
@@ -570,8 +859,12 @@ func createSubscribeTabWithOutput(client *NATSClient) *fyne.Container {
 
 func createSubscribeControls(client *NATSClient) *fyne.Container {
 	// === Subscription Pattern Group ===
-	subjectEntry := widget.NewEntry()
+	subjectEntry := widget.NewSelectEntry(client.GetPatternHistory())
 	subjectEntry.SetPlaceHolder("Subject to subscribe (e.g., test.*)")
+
+	// Group entry for subscription groups with history
+	groupEntry := widget.NewSelectEntry(client.GetGroupHistory())
+	groupEntry.SetPlaceHolder("Group name (optional, for load balancing)")
 
 	examples := widget.NewSelect(
 		[]string{"test.*", "events.>", "logs.error.*", "metrics.cpu"},
@@ -596,18 +889,25 @@ func createSubscribeControls(client *NATSClient) *fyne.Container {
 		func(id widget.ListItemID, obj fyne.CanvasObject) {
 			subjects := client.GetSubscriptions()
 			if id < len(subjects) {
-				subject := subjects[id]
+				subKey := subjects[id]
 				container := obj.(*fyne.Container)
 				label := container.Objects[1].(*widget.Label)
 				button := container.Objects[2].(*widget.Button)
 
-				label.SetText(subject)
+				// Display subscription with group info
+				if strings.Contains(subKey, "@") {
+					parts := strings.Split(subKey, "@")
+					label.SetText(fmt.Sprintf("%s (group: %s)", parts[0], parts[1]))
+				} else {
+					label.SetText(subKey)
+				}
+
 				button.OnTapped = func() {
-					err := client.Unsubscribe(subject)
+					err := client.Unsubscribe(subKey)
 					if err != nil {
 						log.Printf("Unsubscribe failed: %v", err)
 					} else {
-						log.Printf("Unsubscribed from %s", subject)
+						log.Printf("Unsubscribed from %s", subKey)
 						subscriptionList.Refresh()
 					}
 				}
@@ -621,23 +921,51 @@ func createSubscribeControls(client *NATSClient) *fyne.Container {
 			return
 		}
 
-		err := client.Subscribe(subjectEntry.Text)
+		// Add to history before subscribing
+		client.AddPatternHistory(subjectEntry.Text)
+		if groupEntry.Text != "" {
+			client.AddGroupHistory(groupEntry.Text)
+		}
+
+		// Update dropdown options
+		subjectEntry.SetOptions(client.GetPatternHistory())
+		groupEntry.SetOptions(client.GetGroupHistory())
+
+		var err error
+		if groupEntry.Text != "" {
+			err = client.SubscribeWithGroup(subjectEntry.Text, groupEntry.Text)
+		} else {
+			err = client.Subscribe(subjectEntry.Text)
+		}
+
 		if err != nil {
 			log.Printf("Subscribe failed: %v", err)
 		} else {
-			log.Printf("Subscribed to %s", subjectEntry.Text)
+			if groupEntry.Text != "" {
+				log.Printf("Subscribed to %s with group %s", subjectEntry.Text, groupEntry.Text)
+			} else {
+				log.Printf("Subscribed to %s", subjectEntry.Text)
+			}
 			subjectEntry.SetText("")
+			groupEntry.SetText("")
 			subscriptionList.Refresh()
 		}
 	})
 	subscribeBtn.Importance = widget.HighImportance
 
-	// Three parallel rows: pattern, examples, subscribe button (similar to publish layout)
+	// Three parallel rows: pattern, group, examples, subscribe button
 	patternRow := container.NewBorder(
 		nil, nil,
 		widget.NewLabel("Pattern:"),
 		nil,
 		subjectEntry,
+	)
+
+	groupRow := container.NewBorder(
+		nil, nil,
+		widget.NewLabel("Group:"),
+		nil,
+		groupEntry,
 	)
 
 	exampleRow := container.NewBorder(
@@ -649,14 +977,15 @@ func createSubscribeControls(client *NATSClient) *fyne.Container {
 
 	patternSection := container.NewVBox(
 		patternRow,
+		groupRow,
 		exampleRow,
 		subscribeBtn,
 	)
 
 	unsubscribeAllBtn := widget.NewButton("Unsubscribe All", func() {
 		subjects := client.GetSubscriptions()
-		for _, subject := range subjects {
-			client.Unsubscribe(subject)
+		for _, subKey := range subjects {
+			client.Unsubscribe(subKey)
 		}
 		subscriptionList.Refresh()
 	})

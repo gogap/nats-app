@@ -1,4 +1,4 @@
-.PHONY: build run clean test deps fmt lint
+.PHONY: build run clean test deps fmt lint fyne-deps
 
 # Application name
 APP_NAME := nats-client
@@ -17,6 +17,10 @@ deps:
 	go mod tidy
 	go mod download
 
+# Install fyne packaging tool
+fyne-deps: deps
+	go install fyne.io/tools/cmd/fyne@latest
+
 # Format code
 fmt:
 	go fmt ./...
@@ -29,16 +33,20 @@ lint:
 test:
 	go test -v ./...
 
-# Build the application
-build: deps fmt
-	go build -ldflags "$(LDFLAGS)" -o $(APP_NAME) .
+# Build the application using fyne package
+build: fyne-deps fmt
+	fyne package --name $(APP_NAME)
 
-# Build for multiple platforms
-build-all: deps fmt
-	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(APP_NAME)-linux-amd64 .
-	GOOS=windows GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(APP_NAME)-windows-amd64.exe .
-	GOOS=darwin GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(APP_NAME)-darwin-amd64 .
-	GOOS=darwin GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o $(APP_NAME)-darwin-arm64 .
+# Build for multiple platforms using fyne package
+build-all: fyne-deps fmt
+	fyne package --os linux --name $(APP_NAME)-linux-amd64
+	fyne package --os windows --name $(APP_NAME)-windows-amd64
+	fyne package --os darwin --name $(APP_NAME)-darwin-amd64
+	fyne package --os darwin --name $(APP_NAME)-darwin-arm64
+
+# Build using go build (for development/testing)
+build-dev: deps fmt
+	go build -ldflags "$(LDFLAGS)" -o $(APP_NAME)-dev .
 
 # Run the application
 run: deps
@@ -48,6 +56,7 @@ run: deps
 clean:
 	rm -f $(APP_NAME)
 	rm -f $(APP_NAME)-*
+	rm -rf $(APP_NAME)-*.app
 	go clean
 
 # Development mode with hot reload
@@ -57,12 +66,14 @@ dev:
 # Show help
 help:
 	@echo "Available targets:"
-	@echo "  deps        - Install dependencies"
+	@echo "  deps        - Install Go dependencies"
+	@echo "  fyne-deps   - Install fyne packaging tool"
 	@echo "  fmt         - Format code"
 	@echo "  lint        - Lint code"
 	@echo "  test        - Run tests"
-	@echo "  build       - Build the application"
-	@echo "  build-all   - Build for multiple platforms"
+	@echo "  build       - Build the application using fyne package"
+	@echo "  build-all   - Build for multiple platforms using fyne package"
+	@echo "  build-dev   - Build using go build (for development)"
 	@echo "  run         - Run the application"
 	@echo "  clean       - Clean build artifacts"
 	@echo "  dev         - Run in development mode"

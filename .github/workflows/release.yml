@@ -6,16 +6,8 @@ on:
       - 'v*'
 
 jobs:
-  build:
+  build-linux:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        goos: [linux, windows, darwin]
-        goarch: [amd64, arm64]
-        exclude:
-          - goos: windows
-            goarch: arm64
-
     steps:
     - uses: actions/checkout@v4
 
@@ -24,43 +16,109 @@ jobs:
       with:
         go-version: '1.21'
 
-    - name: Install dependencies
+    - name: Install system dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y libgl1-mesa-dev xorg-dev
+
+    - name: Install fyne packaging tool
+      run: go install fyne.io/tools/cmd/fyne@latest
 
     - name: Get the version
       id: get_version
       run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
-    - name: Build
-      env:
-        GOOS: ${{ matrix.goos }}
-        GOARCH: ${{ matrix.goarch }}
-        CGO_ENABLED: 1
+    - name: Build Linux
       run: |
-        if [ "${{ matrix.goos }}" = "windows" ]; then
-          BINARY_NAME="nats-client-${{ matrix.goos }}-${{ matrix.goarch }}.exe"
-        else
-          BINARY_NAME="nats-client-${{ matrix.goos }}-${{ matrix.goarch }}"
-        fi
-        
-        go build -ldflags "-X main.Version=${{ steps.get_version.outputs.VERSION }} -X main.BuildTime=$(date -u +%Y-%m-%d_%H:%M:%S) -X main.GoVersion=$(go version | awk '{print \$3}')" -o $BINARY_NAME .
+        fyne package --name nats-client-linux-amd64 \
+          --app-version ${{ steps.get_version.outputs.VERSION }} \
+          --app-build ${{ github.run_number }}
 
-    - name: Upload artifacts
+    - name: Upload Linux artifact
       uses: actions/upload-artifact@v3
       with:
-        name: binaries
-        path: nats-client-*
+        name: linux-binary
+        path: nats-client-linux-amd64
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+
+    - name: Install fyne packaging tool
+      run: go install fyne.io/tools/cmd/fyne@latest
+
+    - name: Get the version
+      id: get_version
+      run: echo "VERSION=${env:GITHUB_REF}" -replace 'refs/tags/','' | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+    - name: Build Windows
+      run: |
+        fyne package --name nats-client-windows-amd64 --app-version ${{ steps.get_version.outputs.VERSION }} --app-build ${{ github.run_number }}
+
+    - name: Upload Windows artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: windows-binary
+        path: nats-client-windows-amd64.exe
+
+  build-macos:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+
+    - name: Install fyne packaging tool
+      run: go install fyne.io/tools/cmd/fyne@latest
+
+    - name: Get the version
+      id: get_version
+      run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+    - name: Build macOS
+      env:
+        GOARCH: ${{ matrix.arch }}
+      run: |
+        fyne package --name nats-client-darwin-${{ matrix.arch }} \
+          --app-version ${{ steps.get_version.outputs.VERSION }} \
+          --app-build ${{ github.run_number }}
+        
+        # Create zip for easier distribution
+        zip -r nats-client-darwin-${{ matrix.arch }}.zip nats-client-darwin-${{ matrix.arch }}.app
+
+    - name: Upload macOS artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: macos-${{ matrix.arch }}-binary
+        path: nats-client-darwin-${{ matrix.arch }}.zip
 
   release:
-    needs: build
+    needs: [build-linux, build-windows, build-macos]
     runs-on: ubuntu-latest
     steps:
-    - name: Download artifacts
+    - name: Download all artifacts
       uses: actions/download-artifact@v3
-      with:
-        name: binaries
+
+    - name: Flatten artifacts
+      run: |
+        find . -name "nats-client-*" -exec cp {} . \;
+        ls -la nats-client-*
+
+    - name: Get the version
+      id: get_version
+      run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
     - name: Create Release
       id: create_release
@@ -69,13 +127,33 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         tag_name: ${{ github.ref }}
-        release_name: Release ${{ github.ref }}
+        release_name: NATS Client ${{ steps.get_version.outputs.VERSION }}
+        body: |
+          ## NATS Client ${{ steps.get_version.outputs.VERSION }}
+          
+          ### 下载说明
+          - **Windows 64位**: `nats-client-windows-amd64.exe`
+          - **macOS Intel**: `nats-client-darwin-amd64.zip` (解压后双击运行)
+          - **macOS Apple芯片**: `nats-client-darwin-arm64.zip` (解压后双击运行)
+          - **Linux 64位**: `nats-client-linux-amd64`
+          
+          ### 主要功能
+          - 可视化NATS消息发布和订阅
+          - JetStream流处理支持
+          - 智能历史记录管理
+          - 跨平台配置文件持久化
+          
+          ### 快速开始
+          1. 下载对应平台的文件
+          2. 启动NATS服务器: `docker run -p 4222:4222 nats:latest`
+          3. 运行客户端并连接到 `nats://localhost:4222`
         draft: false
         prerelease: false
 
     - name: Upload Release Assets
       run: |
         for file in nats-client-*; do
+          echo "Uploading $file"
           curl \
             -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             -H "Content-Type: application/octet-stream" \

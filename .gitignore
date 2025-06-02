@@ -34,6 +34,13 @@ Thumbs.db
 # Application binaries
 nats-client
 nats-client.exe
+nats-client-*
+nats-client-dev
+
+# Fyne generated files
+*.app
+*.exe
+*.appimage
 
 # Log files
 *.log 

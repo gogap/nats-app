@@ -60,5 +60,18 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y libgl1-mesa-dev xorg-dev
 
-    - name: Build
-      run: go build -v . 
+    - name: Install fyne packaging tool
+      run: go install fyne.io/tools/cmd/fyne@latest
+
+    - name: Build with go
+      run: go build -v .
+
+    - name: Test fyne package
+      run: |
+        fyne package --name nats-client-test
+        ls -la
+      
+    - name: Clean up test files
+      run: |
+        rm -f nats-client-test*
+        rm -rf nats-client-test*.app 
