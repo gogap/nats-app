@@ -1639,7 +1639,7 @@ func createJetStreamOutput(client *NATSClient) *fyne.Container {
 			return
 		}
 
-		info := fmt.Sprintf("JetStream Status: Connected\n")
+		info := "JetStream Status: Connected\n"
 		info += fmt.Sprintf("Streams: %d\n", len(client.GetStreams()))
 		info += fmt.Sprintf("Consumers: %d\n", len(client.GetConsumers()))
 
