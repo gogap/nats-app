@@ -950,7 +950,15 @@ func createPublishOutputArea(client *NATSClient) (*fyne.Container, func()) {
 	outputText := widget.NewMultiLineEntry()
 	outputText.Wrapping = fyne.TextWrapWord
 	outputText.Bind(client.responsesText)
-	outputText.Disable() // Make it read-only but selectable
+
+	// Keep it read-only by preventing user edits
+	outputText.OnChanged = func(text string) {
+		// Restore the original text if user tries to edit
+		currentText, _ := client.responsesText.Get()
+		if text != currentText {
+			outputText.SetText(currentText)
+		}
+	}
 
 	clearOutputBtn := widget.NewButton("Clear Output", func() {
 		client.ClearResponses()
@@ -1160,7 +1168,15 @@ func createSubscribeOutputArea(client *NATSClient) *fyne.Container {
 	messageText := widget.NewMultiLineEntry()
 	messageText.Wrapping = fyne.TextWrapWord
 	messageText.Bind(client.messagesText)
-	messageText.Disable() // Make it read-only but selectable
+
+	// Keep it read-only by preventing user edits
+	messageText.OnChanged = func(text string) {
+		// Restore the original text if user tries to edit
+		currentText, _ := client.messagesText.Get()
+		if text != currentText {
+			messageText.SetText(currentText)
+		}
+	}
 
 	// === Filter and Controls Group ===
 	filterEntry := widget.NewEntry()
