@@ -59,6 +59,13 @@ See [docs/UI_DESIGN.md](docs/UI_DESIGN.md) for detailed design documentation.
 - Real-time clock display
 - About dialog with version info
 
+### JetStream Management
+- ✅ **Stream Management**: Create and manage JetStream streams
+- ✅ **Consumer Management**: Create and configure consumers for streams
+- ✅ **Retention Policies**: Support for Limits, Interest, and WorkQueue policies
+- ✅ **Stream Monitoring**: View stream and consumer information
+- ✅ **Subject Filtering**: Advanced filtering for consumers
+
 ## Installation
 
 ### Download Binary
@@ -132,6 +139,24 @@ For detailed usage instructions, see [docs/USAGE.md](docs/USAGE.md).
 2. Supports wildcards like `test.*` or `events.>`
 3. Click "Subscribe" to start subscription
 4. Subscribed messages will be displayed in real-time in the right message area
+
+### JetStream Operations
+
+#### Creating Streams
+1. Navigate to the "JetStream" tab
+2. Enter stream name (e.g., `ORDERS`)
+3. Specify subjects to capture (e.g., `orders.*, payments.created`)
+4. Select retention policy:
+   - **Limits**: Messages retained until size/age limits
+   - **Interest**: Messages retained while consumers are interested
+   - **WorkQueue**: Messages removed after acknowledgment
+5. Click "Create Stream"
+
+#### Creating Consumers
+1. Enter consumer name (e.g., `processor`)
+2. Specify the stream name to consume from
+3. Optionally add a filter subject for selective consumption
+4. Click "Create Consumer"
 
 ## Configuration
 

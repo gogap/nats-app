@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -16,6 +17,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // Build information
@@ -28,13 +30,25 @@ var (
 // NATSClient represents a NATS client with GUI bindings
 type NATSClient struct {
 	conn          *nats.Conn
+	js            jetstream.JetStream
 	status        binding.String
 	messageCount  binding.Int
 	subscriptions map[string]*nats.Subscription
 	messages      binding.StringList
 	allMessages   []string
 	filter        string
+	// JetStream data
+	streams       []jetstream.StreamInfo
+	consumers     []ConsumerInfo
 	mu            sync.RWMutex
+	refreshJSFunc func()
+}
+
+// ConsumerInfo holds consumer information for display
+type ConsumerInfo struct {
+	Name       string
+	StreamName string
+	Config     jetstream.ConsumerConfig
 }
 
 // NewNATSClient creates a new NATS client instance
@@ -70,6 +84,31 @@ func (nc *NATSClient) Connect(url, username, password string) error {
 	}
 
 	nc.conn = conn
+
+	// Initialize JetStream
+	js, err := jetstream.New(conn)
+	if err != nil {
+		log.Printf("JetStream not available: %v", err)
+		nc.js = nil
+	} else {
+		nc.js = js
+
+		// Auto-refresh JetStream info after connection
+		go func() {
+			time.Sleep(500 * time.Millisecond) // Wait for UI to be ready
+			nc.RefreshJetStreamInfo()
+
+			// Trigger UI refresh if available
+			nc.mu.RLock()
+			refreshFunc := nc.refreshJSFunc
+			nc.mu.RUnlock()
+
+			if refreshFunc != nil {
+				refreshFunc()
+			}
+		}()
+	}
+
 	nc.status.Set("Connected")
 	return nil
 }
@@ -204,6 +243,61 @@ func (nc *NATSClient) applyFilterLocked() {
 	nc.messageCount.Set(len(filteredMessages))
 }
 
+// RefreshJetStreamInfo refreshes the streams and consumers information
+func (nc *NATSClient) RefreshJetStreamInfo() error {
+	if nc.js == nil {
+		return fmt.Errorf("JetStream not available")
+	}
+
+	nc.mu.Lock()
+	defer nc.mu.Unlock()
+
+	// Clear existing data
+	nc.streams = nil
+	nc.consumers = nil
+
+	// Get streams
+	streamsCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	streamNames := nc.js.ListStreams(streamsCtx)
+	for streamInfo := range streamNames.Info() {
+		nc.streams = append(nc.streams, *streamInfo)
+
+		// Get consumers for this stream
+		stream, err := nc.js.Stream(context.Background(), streamInfo.Config.Name)
+		if err != nil {
+			log.Printf("Failed to get stream %s: %v", streamInfo.Config.Name, err)
+			continue
+		}
+
+		consumerNames := stream.ListConsumers(context.Background())
+		for consumerInfo := range consumerNames.Info() {
+			nc.consumers = append(nc.consumers, ConsumerInfo{
+				Name:       consumerInfo.Name,
+				StreamName: streamInfo.Config.Name,
+				Config:     consumerInfo.Config,
+			})
+		}
+	}
+
+	return nil
+}
+
+// GetStreams returns current streams information
+func (nc *NATSClient) GetStreams() []jetstream.StreamInfo {
+	nc.mu.RLock()
+	defer nc.mu.RUnlock()
+	return nc.streams
+}
+
+// GetConsumers returns current consumers information
+func (nc *NATSClient) GetConsumers() []ConsumerInfo {
+	nc.mu.RLock()
+	defer nc.mu.RUnlock()
+	return nc.consumers
+}
+
 func main() {
 	myApp := app.New()
 	myApp.SetIcon(theme.ComputerIcon())
@@ -234,10 +328,11 @@ func createMainUI(client *NATSClient, window fyne.Window) *fyne.Container {
 	// Connection area - horizontal layout at top
 	connectionArea := createConnectionArea(client, window)
 
-	// Create tabs for Publish and Subscribe with their own output areas
+	// Create tabs for Publish, Subscribe, and JetStream
 	pubSubTabs := container.NewAppTabs(
 		container.NewTabItem("Publish", createPublishTabWithOutput(client, window)),
 		container.NewTabItem("Subscribe", createSubscribeTabWithOutput(client)),
+		container.NewTabItem("JetStream", createJetStreamTab(client, window)),
 	)
 	pubSubTabs.SetTabLocation(container.TabLocationTop)
 
@@ -705,4 +800,393 @@ func createStatusBar(client *NATSClient) *fyne.Container {
 			messageCountLabel,
 		),
 	)
+}
+
+func createJetStreamTab(client *NATSClient, window fyne.Window) *fyne.Container {
+	// JetStream controls area
+	jetStreamControls := createJetStreamControls(client, window)
+
+	// JetStream monitoring area
+	jetStreamOutput := createJetStreamOutput(client)
+
+	// Add padding around content for better spacing
+	leftPanel := container.NewPadded(jetStreamControls)
+	rightPanel := container.NewPadded(jetStreamOutput)
+
+	// Split horizontally: controls on left, output on right (50/50)
+	split := container.NewHSplit(leftPanel, rightPanel)
+	split.SetOffset(0.5) // Equal split: 50% each
+	return container.NewBorder(nil, nil, nil, nil, split)
+}
+
+func createJetStreamControls(client *NATSClient, window fyne.Window) *fyne.Container {
+	// === Stream Management ===
+	streamNameEntry := widget.NewEntry()
+	streamNameEntry.SetPlaceHolder("Stream name (e.g., ORDERS)")
+
+	streamSubjectsEntry := widget.NewEntry()
+	streamSubjectsEntry.SetPlaceHolder("Subjects (e.g., orders.*, users.created)")
+
+	retentionSelect := widget.NewSelect(
+		[]string{"Limits", "Interest", "WorkQueue"},
+		nil,
+	)
+	retentionSelect.SetSelected("Limits")
+
+	// Stream configuration rows
+	streamNameRow := container.NewBorder(
+		nil, nil,
+		widget.NewLabel("Name:"),
+		nil,
+		streamNameEntry,
+	)
+
+	streamSubjectsRow := container.NewBorder(
+		nil, nil,
+		widget.NewLabel("Subjects:"),
+		nil,
+		streamSubjectsEntry,
+	)
+
+	retentionRow := container.NewBorder(
+		nil, nil,
+		widget.NewLabel("Retention:"),
+		nil,
+		retentionSelect,
+	)
+
+	createStreamBtn := widget.NewButton("Create Stream", func() {
+		if client.js == nil {
+			dialog.ShowError(fmt.Errorf("JetStream not available"), window)
+			return
+		}
+
+		if streamNameEntry.Text == "" {
+			dialog.ShowError(fmt.Errorf("stream name cannot be empty"), window)
+			return
+		}
+
+		subjects := strings.Split(streamSubjectsEntry.Text, ",")
+		for i, subject := range subjects {
+			subjects[i] = strings.TrimSpace(subject)
+		}
+
+		cfg := jetstream.StreamConfig{
+			Name:     streamNameEntry.Text,
+			Subjects: subjects,
+		}
+
+		switch retentionSelect.Selected {
+		case "Interest":
+			cfg.Retention = jetstream.InterestPolicy
+		case "WorkQueue":
+			cfg.Retention = jetstream.WorkQueuePolicy
+		default:
+			cfg.Retention = jetstream.LimitsPolicy
+		}
+
+		_, err := client.js.CreateStream(context.Background(), cfg)
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("failed to create stream: %v", err), window)
+		} else {
+			dialog.ShowInformation("Success", fmt.Sprintf("Stream %s created", streamNameEntry.Text), window)
+			streamNameEntry.SetText("")
+			streamSubjectsEntry.SetText("")
+
+			// Auto-refresh after creating stream
+			go func() {
+				time.Sleep(100 * time.Millisecond)
+				client.mu.RLock()
+				refreshFunc := client.refreshJSFunc
+				client.mu.RUnlock()
+
+				if refreshFunc != nil {
+					refreshFunc()
+				}
+			}()
+		}
+	})
+	createStreamBtn.Importance = widget.HighImportance
+
+	streamSection := container.NewVBox(
+		widget.NewLabel("Stream Management:"),
+		streamNameRow,
+		streamSubjectsRow,
+		retentionRow,
+		createStreamBtn,
+	)
+
+	// === Consumer Management ===
+	consumerNameEntry := widget.NewEntry()
+	consumerNameEntry.SetPlaceHolder("Consumer name (e.g., processor)")
+
+	consumerStreamEntry := widget.NewEntry()
+	consumerStreamEntry.SetPlaceHolder("Stream name")
+
+	consumerSubjectEntry := widget.NewEntry()
+	consumerSubjectEntry.SetPlaceHolder("Filter subject (optional)")
+
+	consumerNameRow := container.NewBorder(
+		nil, nil,
+		widget.NewLabel("Name:"),
+		nil,
+		consumerNameEntry,
+	)
+
+	consumerStreamRow := container.NewBorder(
+		nil, nil,
+		widget.NewLabel("Stream:"),
+		nil,
+		consumerStreamEntry,
+	)
+
+	consumerSubjectRow := container.NewBorder(
+		nil, nil,
+		widget.NewLabel("Filter:"),
+		nil,
+		consumerSubjectEntry,
+	)
+
+	createConsumerBtn := widget.NewButton("Create Consumer", func() {
+		if client.js == nil {
+			dialog.ShowError(fmt.Errorf("JetStream not available"), window)
+			return
+		}
+
+		if consumerNameEntry.Text == "" || consumerStreamEntry.Text == "" {
+			dialog.ShowError(fmt.Errorf("consumer name and stream name cannot be empty"), window)
+			return
+		}
+
+		stream, err := client.js.Stream(context.Background(), consumerStreamEntry.Text)
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("stream not found: %v", err), window)
+			return
+		}
+
+		cfg := jetstream.ConsumerConfig{
+			Name: consumerNameEntry.Text,
+		}
+
+		if consumerSubjectEntry.Text != "" {
+			cfg.FilterSubject = consumerSubjectEntry.Text
+		}
+
+		_, err = stream.CreateConsumer(context.Background(), cfg)
+		if err != nil {
+			dialog.ShowError(fmt.Errorf("failed to create consumer: %v", err), window)
+		} else {
+			dialog.ShowInformation("Success", fmt.Sprintf("Consumer %s created", consumerNameEntry.Text), window)
+			consumerNameEntry.SetText("")
+			consumerStreamEntry.SetText("")
+			consumerSubjectEntry.SetText("")
+
+			// Auto-refresh after creating consumer
+			go func() {
+				time.Sleep(100 * time.Millisecond)
+				client.mu.RLock()
+				refreshFunc := client.refreshJSFunc
+				client.mu.RUnlock()
+
+				if refreshFunc != nil {
+					refreshFunc()
+				}
+			}()
+		}
+	})
+	createConsumerBtn.Importance = widget.HighImportance
+
+	consumerSection := container.NewVBox(
+		widget.NewLabel("Consumer Management:"),
+		consumerNameRow,
+		consumerStreamRow,
+		consumerSubjectRow,
+		createConsumerBtn,
+	)
+
+	// === Action Buttons ===
+	refreshBtn := widget.NewButton("Refresh", func() {
+		client.mu.RLock()
+		refreshFunc := client.refreshJSFunc
+		client.mu.RUnlock()
+
+		if refreshFunc != nil {
+			refreshFunc()
+		}
+	})
+
+	deleteStreamBtn := widget.NewButton("Delete Stream", func() {
+		// TODO: Implement stream deletion with confirmation
+	})
+
+	actionSection := container.NewGridWithColumns(2, refreshBtn, deleteStreamBtn)
+
+	// Main layout
+	return container.NewBorder(
+		container.NewVBox(
+			streamSection,
+			widget.NewSeparator(),
+			consumerSection,
+			widget.NewSeparator(),
+		), // Top
+		actionSection, // Bottom (pinned)
+		nil, nil,      // Left, Right
+		widget.NewLabel(""), // Center (placeholder)
+	)
+}
+
+func createJetStreamOutput(client *NATSClient) *fyne.Container {
+	// Streams list
+	var streamsList *widget.List
+	streamsList = widget.NewList(
+		func() int {
+			return len(client.GetStreams())
+		},
+		func() fyne.CanvasObject {
+			return container.NewHBox(
+				widget.NewIcon(theme.FolderIcon()),
+				widget.NewLabel(""),
+				widget.NewLabel(""),
+			)
+		},
+		func(id widget.ListItemID, obj fyne.CanvasObject) {
+			streams := client.GetStreams()
+			if id < len(streams) {
+				stream := streams[id]
+				container := obj.(*fyne.Container)
+				nameLabel := container.Objects[1].(*widget.Label)
+				infoLabel := container.Objects[2].(*widget.Label)
+
+				nameLabel.SetText(stream.Config.Name)
+				infoLabel.SetText(fmt.Sprintf("Msgs: %d, Bytes: %s",
+					stream.State.Msgs,
+					formatBytes(stream.State.Bytes)))
+			}
+		},
+	)
+
+	streamsScroll := container.NewScroll(streamsList)
+	streamsScroll.SetMinSize(fyne.NewSize(0, 200))
+
+	streamsSection := container.NewVBox(
+		widget.NewLabel("Streams:"),
+		streamsScroll,
+	)
+
+	// Consumers list
+	var consumersList *widget.List
+	consumersList = widget.NewList(
+		func() int {
+			return len(client.GetConsumers())
+		},
+		func() fyne.CanvasObject {
+			return container.NewHBox(
+				widget.NewIcon(theme.DocumentIcon()),
+				widget.NewLabel(""),
+				widget.NewLabel(""),
+			)
+		},
+		func(id widget.ListItemID, obj fyne.CanvasObject) {
+			consumers := client.GetConsumers()
+			if id < len(consumers) {
+				consumer := consumers[id]
+				container := obj.(*fyne.Container)
+				nameLabel := container.Objects[1].(*widget.Label)
+				infoLabel := container.Objects[2].(*widget.Label)
+
+				nameLabel.SetText(consumer.Name)
+				infoLabel.SetText(fmt.Sprintf("Stream: %s", consumer.StreamName))
+			}
+		},
+	)
+
+	consumersScroll := container.NewScroll(consumersList)
+	consumersScroll.SetMinSize(fyne.NewSize(0, 200))
+
+	consumersSection := container.NewVBox(
+		widget.NewLabel("Consumers:"),
+		consumersScroll,
+	)
+
+	// JetStream info
+	jsInfoEntry := widget.NewMultiLineEntry()
+	jsInfoEntry.SetPlaceHolder("JetStream information will appear here...")
+	jsInfoEntry.Wrapping = fyne.TextWrapWord
+
+	// Update info when refreshed
+	updateJSInfo := func() {
+		if client.js == nil {
+			jsInfoEntry.SetText("JetStream not available")
+			return
+		}
+
+		info := fmt.Sprintf("JetStream Status: Connected\n")
+		info += fmt.Sprintf("Streams: %d\n", len(client.GetStreams()))
+		info += fmt.Sprintf("Consumers: %d\n", len(client.GetConsumers()))
+
+		// Add stream details
+		for _, stream := range client.GetStreams() {
+			info += fmt.Sprintf("\nStream: %s\n", stream.Config.Name)
+			info += fmt.Sprintf("  Subjects: %v\n", stream.Config.Subjects)
+			info += fmt.Sprintf("  Messages: %d\n", stream.State.Msgs)
+			info += fmt.Sprintf("  Bytes: %s\n", formatBytes(stream.State.Bytes))
+		}
+
+		jsInfoEntry.SetText(info)
+	}
+
+	jsInfoScroll := container.NewScroll(jsInfoEntry)
+	jsInfoScroll.SetMinSize(fyne.NewSize(0, 150))
+
+	jsInfoSection := container.NewVBox(
+		widget.NewLabel("JetStream Info:"),
+		jsInfoScroll,
+	)
+
+	// Refresh function
+	refreshData := func() {
+		err := client.RefreshJetStreamInfo()
+		if err != nil {
+			log.Printf("Failed to refresh JetStream info: %v", err)
+			jsInfoEntry.SetText(fmt.Sprintf("Error: %v", err))
+		} else {
+			streamsList.Refresh()
+			consumersList.Refresh()
+			updateJSInfo()
+		}
+	}
+
+	// Auto-refresh on creation
+	go func() {
+		time.Sleep(100 * time.Millisecond) // Small delay to ensure UI is ready
+		refreshData()
+	}()
+
+	// Store refresh function for external use
+	client.mu.Lock()
+	client.refreshJSFunc = refreshData
+	client.mu.Unlock()
+
+	// Main layout
+	return container.NewVBox(
+		streamsSection,
+		widget.NewSeparator(),
+		consumersSection,
+		widget.NewSeparator(),
+		jsInfoSection,
+	)
+}
+
+// formatBytes formats byte count as human readable string
+func formatBytes(bytes uint64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
