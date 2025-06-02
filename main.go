@@ -154,6 +154,9 @@ type NATSClient struct {
 	requestResponses binding.StringList
 	allResponses     []string
 	responseCount    binding.Int
+	// Text-based outputs for copy-paste
+	messagesText  binding.String
+	responsesText binding.String
 	// Configuration
 	config              *AppConfig
 	mu                  sync.RWMutex
@@ -184,6 +187,8 @@ func NewNATSClient() *NATSClient {
 		requestResponses: binding.NewStringList(),
 		allResponses:     make([]string, 0),
 		responseCount:    binding.NewInt(),
+		messagesText:     binding.NewString(),
+		responsesText:    binding.NewString(),
 		config:           config,
 	}
 }
@@ -360,6 +365,28 @@ func (nc *NATSClient) addMessage(formattedMsg string) {
 
 	// Apply filter and update display
 	nc.applyFilterLocked()
+
+	// Update text format for copy-paste
+	nc.updateMessagesTextLocked()
+}
+
+// updateMessagesTextLocked updates the text format for messages (must be called with lock held)
+func (nc *NATSClient) updateMessagesTextLocked() {
+	var filteredMessages []string
+
+	if nc.filter == "" {
+		filteredMessages = nc.allMessages
+	} else {
+		for _, msg := range nc.allMessages {
+			if strings.Contains(strings.ToLower(msg), strings.ToLower(nc.filter)) {
+				filteredMessages = append(filteredMessages, msg)
+			}
+		}
+	}
+
+	// Join all messages with newlines for text display
+	textContent := strings.Join(filteredMessages, "\n")
+	nc.messagesText.Set(textContent)
 }
 
 // addResponse is a helper to add response to the request-reply list thread-safely
@@ -378,6 +405,10 @@ func (nc *NATSClient) addResponse(formattedMsg string) {
 	// Update display
 	nc.requestResponses.Set(nc.allResponses)
 	nc.responseCount.Set(len(nc.allResponses))
+
+	// Update text format for copy-paste
+	textContent := strings.Join(nc.allResponses, "\n")
+	nc.responsesText.Set(textContent)
 
 	// Trigger UI refresh if available
 	if nc.refreshResponseFunc != nil {
@@ -420,6 +451,7 @@ func (nc *NATSClient) ClearMessages() {
 	nc.allMessages = make([]string, 0)
 	nc.messages.Set([]string{})
 	nc.messageCount.Set(0)
+	nc.messagesText.Set("")
 }
 
 // ClearResponses clears all responses from the request-reply display
@@ -430,6 +462,7 @@ func (nc *NATSClient) ClearResponses() {
 	nc.allResponses = make([]string, 0)
 	nc.requestResponses.Set([]string{})
 	nc.responseCount.Set(0)
+	nc.responsesText.Set("")
 }
 
 // SetFilter sets the message filter
@@ -457,6 +490,10 @@ func (nc *NATSClient) applyFilterLocked() {
 
 	nc.messages.Set(filteredMessages)
 	nc.messageCount.Set(len(filteredMessages))
+
+	// Update text format
+	textContent := strings.Join(filteredMessages, "\n")
+	nc.messagesText.Set(textContent)
 }
 
 // RefreshJetStreamInfo refreshes the streams and consumers information
@@ -909,29 +946,14 @@ func createPublishControls(client *NATSClient, window fyne.Window) *fyne.Contain
 }
 
 func createPublishOutputArea(client *NATSClient) (*fyne.Container, func()) {
-	// Output area for request-reply responses
-	outputList := widget.NewList(
-		func() int {
-			length := client.requestResponses.Length()
-			return length
-		},
-		func() fyne.CanvasObject {
-			label := widget.NewLabel("")
-			label.Wrapping = fyne.TextWrapWord
-			return label
-		},
-		func(id widget.ListItemID, obj fyne.CanvasObject) {
-			label := obj.(*widget.Label)
-			value, err := client.requestResponses.GetValue(id)
-			if err == nil {
-				label.SetText(value)
-			}
-		},
-	)
+	// Output area for request-reply responses using MultiLineEntry for better copy-paste
+	outputText := widget.NewMultiLineEntry()
+	outputText.Wrapping = fyne.TextWrapWord
+	outputText.Bind(client.responsesText)
+	outputText.Disable() // Make it read-only but selectable
 
 	clearOutputBtn := widget.NewButton("Clear Output", func() {
 		client.ClearResponses()
-		outputList.Refresh()
 	})
 
 	// Response count display
@@ -946,16 +968,16 @@ func createPublishOutputArea(client *NATSClient) (*fyne.Container, func()) {
 		nil,
 	)
 
-	// Response display card
+	// Response display card with scroll
 	responseCard := container.NewBorder(
 		header,
 		nil, nil, nil,
-		container.NewScroll(outputList),
+		container.NewScroll(outputText),
 	)
 
-	// Refresh function
+	// Refresh function (now less needed since we use binding)
 	refreshFunc := func() {
-		outputList.Refresh()
+		// Text automatically updates via binding
 	}
 
 	return responseCard, refreshFunc
@@ -1134,31 +1156,11 @@ func createSubscribeControls(client *NATSClient) *fyne.Container {
 }
 
 func createSubscribeOutputArea(client *NATSClient) *fyne.Container {
-	// Message list for subscription output
-	messageList := widget.NewList(
-		func() int {
-			msgs, _ := client.messages.Get()
-			return len(msgs)
-		},
-		func() fyne.CanvasObject {
-			label := widget.NewLabel("")
-			label.Wrapping = fyne.TextWrapWord
-			return label
-		},
-		func(id widget.ListItemID, obj fyne.CanvasObject) {
-			msgs, _ := client.messages.Get()
-			if id < len(msgs) {
-				label := obj.(*widget.Label)
-				label.SetText(msgs[id])
-			}
-		},
-	)
-
-	// Bind the list to refresh when messages change
-	client.messages.AddListener(binding.NewDataListener(func() {
-		messageList.Refresh()
-		messageList.ScrollToBottom()
-	}))
+	// Message text area for subscription output using MultiLineEntry for better copy-paste
+	messageText := widget.NewMultiLineEntry()
+	messageText.Wrapping = fyne.TextWrapWord
+	messageText.Bind(client.messagesText)
+	messageText.Disable() // Make it read-only but selectable
 
 	// === Filter and Controls Group ===
 	filterEntry := widget.NewEntry()
@@ -1202,7 +1204,7 @@ func createSubscribeOutputArea(client *NATSClient) *fyne.Container {
 	actionSection := container.NewGridWithColumns(3, pauseBtn, exportBtn, clearBtn)
 
 	// === Message Display with proper scroll ===
-	messageScroll := container.NewScroll(messageList)
+	messageScroll := container.NewScroll(messageText)
 	messageScroll.SetMinSize(fyne.NewSize(0, 300))
 
 	messageSection := container.NewVBox(
