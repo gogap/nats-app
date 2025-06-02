@@ -97,12 +97,12 @@ jobs:
       env:
         GOARCH: ${{ matrix.arch }}
       run: |
-        fyne package --name nats-client-darwin-${{ matrix.arch }} \
+        fyne package --name NATS \
           --app-version ${{ steps.get_version.outputs.VERSION }} \
           --app-build ${{ github.run_number }}
         
         # Create zip for easier distribution
-        zip -r nats-client-darwin-${{ matrix.arch }}.zip nats-client-darwin-${{ matrix.arch }}.app
+        zip -r nats-client-darwin-${{ matrix.arch }}.zip NATS.app
 
     - name: Upload macOS artifact
       uses: actions/upload-artifact@v4

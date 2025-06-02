@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"image/color"
 	"log"
 	"os"
 	"path/filepath"
@@ -136,51 +135,6 @@ func getDefaultConfig() *AppConfig {
 		PatternHistory:    []string{"test.*", "events.>", "logs.*", "metrics.*"},
 		GroupHistory:      []string{"workers", "processors", "analytics"},
 		LastConnectionURL: "nats://localhost:4222",
-	}
-}
-
-// ChineseTheme provides Chinese font support with enhanced weight control
-type ChineseTheme struct {
-	fyne.Theme
-	chineseFont fyne.Resource
-}
-
-// NewChineseTheme creates a new Chinese-optimized theme
-func NewChineseTheme(basedOn fyne.Theme) *ChineseTheme {
-	return &ChineseTheme{
-		Theme:       basedOn,
-		chineseFont: resourceSourceHanSansSCVFTtf,
-	}
-}
-
-// Font returns the appropriate font for Chinese display with enhanced weight
-func (ct *ChineseTheme) Font(style fyne.TextStyle) fyne.Resource {
-	// 如果需要等宽字体，使用默认主题（通常是英文等宽字体）
-	if style.Monospace {
-		return ct.Theme.Font(style)
-	}
-
-	// 对于中文字体，SourceHanSansSC-VF.ttf 是可变字体
-	// 我们总是返回中文字体，让字体本身处理粗体等样式
-	if ct.chineseFont != nil {
-		return ct.chineseFont
-	}
-
-	// 最后回退到基础主题
-	return ct.Theme.Font(style)
-}
-
-// Color 重写颜色方法以增强文字对比度，使文字显得更粗
-func (ct *ChineseTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
-	switch name {
-	case theme.ColorNameForeground:
-		// 增加前景色的对比度，使文字更明显
-		if variant == theme.VariantLight {
-			return color.RGBA{R: 20, G: 20, B: 20, A: 255} // 更深的黑色
-		}
-		return color.RGBA{R: 245, G: 245, B: 245, A: 255} // 更亮的白色
-	default:
-		return ct.Theme.Color(name, variant)
 	}
 }
 
@@ -723,10 +677,6 @@ func (nc *NATSClient) SaveConfiguration() error {
 func main() {
 	myApp := app.New()
 	myApp.SetIcon(theme.ComputerIcon())
-
-	// 设置中文主题为默认主题
-	chineseTheme := NewChineseTheme(theme.DefaultTheme())
-	myApp.Settings().SetTheme(chineseTheme)
 
 	myWindow := myApp.NewWindow(fmt.Sprintf("NATS Client v%s", Version))
 	myWindow.Resize(fyne.NewSize(1000, 700))
