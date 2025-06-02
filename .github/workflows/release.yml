@@ -30,7 +30,7 @@ jobs:
 
     - name: Get the version
       id: get_version
-      run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+      run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
     - name: Build Linux
       run: |
@@ -60,7 +60,7 @@ jobs:
     - name: Get the version
       id: get_version
       run: |
-        $version = $env:GITHUB_REF -replace 'refs/tags/',''
+        $version = $env:GITHUB_REF -replace 'refs/tags/v',''
         echo "VERSION=$version" >> $env:GITHUB_OUTPUT
 
     - name: Build Windows
@@ -91,7 +91,7 @@ jobs:
 
     - name: Get the version
       id: get_version
-      run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+      run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
     - name: Build macOS
       env:
@@ -126,7 +126,7 @@ jobs:
 
     - name: Get the version
       id: get_version
-      run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+      run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
     - name: Create Release
       uses: softprops/action-gh-release@v2
