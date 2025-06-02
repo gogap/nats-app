@@ -69,9 +69,20 @@ jobs:
     - name: Test fyne package
       run: |
         fyne package --name nats-client-test
-        ls -la
-      
+        Write-Host "Files created:"
+        Get-ChildItem -Name "*nats-client-test*" -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  - $_" }
+      shell: pwsh
+
     - name: Clean up test files
       run: |
-        rm -f nats-client-test*
-        rm -rf nats-client-test*.app 
+        Write-Host "Cleaning up test files..."
+        $filesToRemove = Get-ChildItem -Name "*nats-client-test*" -ErrorAction SilentlyContinue
+        if ($filesToRemove) {
+          foreach ($file in $filesToRemove) {
+            Write-Host "Removing: $file"
+            Remove-Item $file -Recurse -Force -ErrorAction SilentlyContinue
+          }
+        } else {
+          Write-Host "No test files to clean up"
+        }
+      shell: pwsh 
