@@ -202,16 +202,20 @@ cd nats-app
 # Install dependencies
 go mod tidy
 
-# Install fyne packaging tool
-go install fyne.io/tools/cmd/fyne@latest
-
 # Build for current platform
-fyne package --name nats-client
+make build
 
 # Run
 # macOS: open nats-client.app
 # Windows/Linux: ./nats-client
 ```
+
+#### Font Support
+This application uses Go embed technology for built-in Chinese font support:
+- **Font**: Source Han Sans CN Medium weight (SourceHanSansCN-Medium.otf)
+- **Size**: ~8MB
+- **Advantage**: No system font installation required, automatic Chinese display support
+- **Implementation**: Auto-embedded during build, no additional steps needed
 
 #### Cross-platform Compilation
 ```bash
@@ -231,11 +235,11 @@ fyne package --os darwin --name nats-client --app-version 1.0.0 --app-build 1
 #### Using Makefile
 ```bash
 make build          # Build current platform
-make build-all      # Build all platforms
+make build-release  # Build release version
 make clean          # Clean build files
 ```
 
-> **Note**: Using `fyne package` ensures the generated application includes all necessary resource files and dependencies, and can run directly on target platforms without requiring Go environment.
+> **Note**: Using `fyne package` ensures the generated application includes all necessary resource files and dependencies, and can run directly on target platforms without requiring Go environment. Font files are auto-embedded via Go embed for optimal Chinese display.
 
 ## 📄 License
 

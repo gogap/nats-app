@@ -136,18 +136,19 @@ jobs:
         body: |
           ## 🚀 NATS Client ${{ steps.get_version.outputs.VERSION }}
           
-          A modern cross-platform NATS client with intuitive GUI, featuring complete NATS messaging and JetStream support.
+          A modern cross-platform NATS client with intuitive GUI, featuring complete NATS messaging and JetStream support with **Chinese font support**.
           
           ### 📥 Download Instructions / 下载说明
           
           | Platform | Architecture | File | Size |
           |----------|--------------|------|------|
-          | **Windows** | 64-bit | `nats-client-windows-amd64.exe` | ~15 MB |
-          | **macOS** | Intel | `nats-client-darwin-amd64.zip` | ~14 MB |
-          | **macOS** | Apple Silicon | `nats-client-darwin-arm64.zip` | ~14 MB |
-          | **Linux** | 64-bit | `nats-client-linux-amd64` | ~15 MB |
+          | **Windows** | 64-bit | `nats-client-windows-amd64.exe` | ~50 MB |
+          | **macOS** | Intel | `nats-client-darwin-amd64.zip` | ~45 MB |
+          | **macOS** | Apple Silicon | `nats-client-darwin-arm64.zip` | ~45 MB |
+          | **Linux** | 64-bit | `nats-client-linux-amd64` | ~50 MB |
           
-          > **Note**: macOS users may need to right-click → "Open" for first launch due to Gatekeeper.
+          > **Note**: File sizes increased due to embedded Chinese font (SourceHanSansSC-VF.ttf ~36MB) using Go embed.
+          > **提示**: 文件大小增加是因为使用Go embed内置了中文字体以便更好地显示中文字符。
           
           ### ✨ Key Features / 主要功能
           - 🔗 **Connection Management**: Smart history with auto-save URLs
@@ -156,11 +157,13 @@ jobs:
           - 💾 **JetStream Support**: Streams, consumers, retention policies
           - 📊 **Real-time Monitoring**: Live filtering, message statistics
           - 🛠️ **Cross-platform Config**: Persistent settings across platforms
+          - 🎨 **Chinese Font Support**: Built-in SourceHanSansSC font using Go embed for excellent Chinese display / 使用Go embed内置思源黑体，完美支持中文显示
           
           ### 🎯 Quick Start / 快速开始
           1. Download the appropriate file for your platform / 下载适合您平台的文件
           2. Start NATS server: `docker run -p 4222:4222 nats:latest`
           3. Run the client and connect to `nats://localhost:4222`
+          4. Chinese characters are automatically supported / 自动支持中文字符显示
           
           ### 📚 Documentation / 文档
           - **English**: [README_EN.md](README_EN.md) | [Build Guide](docs/BUILD_EN.md)

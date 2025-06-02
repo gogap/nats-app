@@ -202,16 +202,20 @@ cd nats-app
 # 安装依赖
 go mod tidy
 
-# 安装 fyne 打包工具
-go install fyne.io/tools/cmd/fyne@latest
-
 # 编译当前平台
-fyne package --name nats-client
+make build
 
 # 运行 (macOS 会生成 .app 包，Windows 生成 .exe，Linux 生成可执行文件)
 # macOS: open nats-client.app
 # Windows/Linux: ./nats-client
 ```
+
+#### 字体支持
+本应用使用 Go embed 技术内置中文字体：
+- **字体**: 思源黑体中等粗细 (SourceHanSansCN-Medium.otf)
+- **大小**: 约8MB
+- **优势**: 无需系统安装字体，自动支持中文显示
+- **实现**: 构建时自动嵌入，无需额外步骤
 
 #### 跨平台编译
 ```bash
@@ -231,11 +235,11 @@ fyne package --os darwin --name nats-client --app-version 1.0.0 --app-build 1
 #### 使用Makefile
 ```bash
 make build          # 编译当前平台
-make build-all      # 编译所有平台
+make build-release  # 编译发布版本
 make clean          # 清理编译文件
 ```
 
-> **注意**: 使用 `fyne package` 命令可以确保生成的应用程序包含所有必要的资源文件和依赖，在目标平台上可以直接运行，无需安装Go环境。
+> **注意**: 使用 `fyne package` 命令可以确保生成的应用程序包含所有必要的资源文件和依赖，在目标平台上可以直接运行，无需安装Go环境。字体文件会通过Go embed自动嵌入，提供最佳的中文显示效果。
 
 ## 📄 许可证
 

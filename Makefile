@@ -1,4 +1,4 @@
-.PHONY: build run clean test deps fmt lint fyne-deps
+.PHONY: build run clean test deps fmt lint
 
 # Application name
 APP_NAME := nats-client
@@ -17,10 +17,6 @@ deps:
 	go mod tidy
 	go mod download
 
-# Install fyne packaging tool
-fyne-deps: deps
-	go install fyne.io/tools/cmd/fyne@latest
-
 # Format code
 fmt:
 	go fmt ./...
@@ -33,20 +29,23 @@ lint:
 test:
 	go test -v ./...
 
-# Build the application using fyne package
-build: fyne-deps fmt
-	fyne package --name $(APP_NAME)
+# Build development version (with embedded fonts)
+build: fmt
+	go build -ldflags="-X main.Version=dev -X main.BuildTime=$(shell date -u +'%Y-%m-%d_%H:%M:%S_UTC') -X main.GoVersion=$(shell go version | awk '{print $$3}')" -o $(APP_NAME) .
 
-# Build for multiple platforms using fyne package
-build-all: fyne-deps fmt
-	fyne package --os linux --name $(APP_NAME)-linux-amd64
-	fyne package --os windows --name $(APP_NAME)-windows-amd64
-	fyne package --os darwin --name $(APP_NAME)-darwin-amd64
-	fyne package --os darwin --name $(APP_NAME)-darwin-arm64
+# Build with specific version
+build-release: fmt
+	go build -ldflags="-X main.Version=$(VERSION) -X main.BuildTime=$(shell date -u +'%Y-%m-%d_%H:%M:%S_UTC') -X main.GoVersion=$(shell go version | awk '{print $$3}')" -o $(APP_NAME) .
 
-# Build using go build (for development/testing)
-build-dev: deps fmt
-	go build -ldflags "$(LDFLAGS)" -o $(APP_NAME)-dev .
+# Development build with live-reload (requires air)
+build-dev:
+	@if command -v air >/dev/null 2>&1; then \
+		air; \
+	else \
+		echo "Air not found. Installing..."; \
+		go install github.com/cosmtrek/air@latest; \
+		air; \
+	fi
 
 # Run the application
 run: deps
@@ -55,25 +54,20 @@ run: deps
 # Clean build artifacts
 clean:
 	rm -f $(APP_NAME)
-	rm -f $(APP_NAME)-*
-	rm -rf $(APP_NAME)-*.app
-	go clean
-
-# Development mode with hot reload
-dev:
-	air
+	rm -f nats-client
+	rm -rf dist/
+	rm -rf fyne-cross/
 
 # Show help
 help:
 	@echo "Available targets:"
 	@echo "  deps        - Install Go dependencies"
-	@echo "  fyne-deps   - Install fyne packaging tool"
 	@echo "  fmt         - Format code"
 	@echo "  lint        - Lint code"
 	@echo "  test        - Run tests"
-	@echo "  build       - Build the application using fyne package"
-	@echo "  build-all   - Build for multiple platforms using fyne package"
-	@echo "  build-dev   - Build using go build (for development)"
+	@echo "  build       - Build the application (with embedded fonts)"
+	@echo "  build-release - Build with release version"
+	@echo "  build-dev   - Build with live-reload"
 	@echo "  run         - Run the application"
 	@echo "  clean       - Clean build artifacts"
 	@echo "  dev         - Run in development mode"
