@@ -5,6 +5,10 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+  packages: write
+
 jobs:
   build-linux:
     runs-on: ubuntu-latest
@@ -12,7 +16,7 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@v5
       with:
         go-version: '1.21'
 
@@ -35,7 +39,7 @@ jobs:
           --app-build ${{ github.run_number }}
 
     - name: Upload Linux artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: linux-binary
         path: nats-client-linux-amd64
@@ -46,7 +50,7 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@v5
       with:
         go-version: '1.21'
 
@@ -55,14 +59,16 @@ jobs:
 
     - name: Get the version
       id: get_version
-      run: echo "VERSION=${env:GITHUB_REF}" -replace 'refs/tags/','' | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+      run: |
+        $version = $env:GITHUB_REF -replace 'refs/tags/',''
+        echo "VERSION=$version" >> $env:GITHUB_OUTPUT
 
     - name: Build Windows
       run: |
         fyne package --name nats-client-windows-amd64 --app-version ${{ steps.get_version.outputs.VERSION }} --app-build ${{ github.run_number }}
 
     - name: Upload Windows artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: windows-binary
         path: nats-client-windows-amd64.exe
@@ -76,7 +82,7 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@v5
       with:
         go-version: '1.21'
 
@@ -99,7 +105,7 @@ jobs:
         zip -r nats-client-darwin-${{ matrix.arch }}.zip nats-client-darwin-${{ matrix.arch }}.app
 
     - name: Upload macOS artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: macos-${{ matrix.arch }}-binary
         path: nats-client-darwin-${{ matrix.arch }}.zip
@@ -109,54 +115,58 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Download all artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
+      with:
+        merge-multiple: true
 
-    - name: Flatten artifacts
+    - name: List artifacts
       run: |
-        find . -name "nats-client-*" -exec cp {} . \;
-        ls -la nats-client-*
+        ls -la
+        find . -name "nats-client-*" -type f
 
     - name: Get the version
       id: get_version
       run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
     - name: Create Release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      uses: softprops/action-gh-release@v2
       with:
-        tag_name: ${{ github.ref }}
-        release_name: NATS Client ${{ steps.get_version.outputs.VERSION }}
+        tag_name: ${{ github.ref_name }}
+        name: NATS Client ${{ steps.get_version.outputs.VERSION }}
         body: |
-          ## NATS Client ${{ steps.get_version.outputs.VERSION }}
+          ## 🚀 NATS Client ${{ steps.get_version.outputs.VERSION }}
           
-          ### 下载说明
-          - **Windows 64位**: `nats-client-windows-amd64.exe`
-          - **macOS Intel**: `nats-client-darwin-amd64.zip` (解压后双击运行)
-          - **macOS Apple芯片**: `nats-client-darwin-arm64.zip` (解压后双击运行)
-          - **Linux 64位**: `nats-client-linux-amd64`
+          A modern cross-platform NATS client with intuitive GUI, featuring complete NATS messaging and JetStream support.
           
-          ### 主要功能
-          - 可视化NATS消息发布和订阅
-          - JetStream流处理支持
-          - 智能历史记录管理
-          - 跨平台配置文件持久化
+          ### 📥 Download Instructions / 下载说明
           
-          ### 快速开始
-          1. 下载对应平台的文件
-          2. 启动NATS服务器: `docker run -p 4222:4222 nats:latest`
-          3. 运行客户端并连接到 `nats://localhost:4222`
+          | Platform | Architecture | File | Size |
+          |----------|--------------|------|------|
+          | **Windows** | 64-bit | `nats-client-windows-amd64.exe` | ~15 MB |
+          | **macOS** | Intel | `nats-client-darwin-amd64.zip` | ~14 MB |
+          | **macOS** | Apple Silicon | `nats-client-darwin-arm64.zip` | ~14 MB |
+          | **Linux** | 64-bit | `nats-client-linux-amd64` | ~15 MB |
+          
+          > **Note**: macOS users may need to right-click → "Open" for first launch due to Gatekeeper.
+          
+          ### ✨ Key Features / 主要功能
+          - 🔗 **Connection Management**: Smart history with auto-save URLs
+          - 📤 **Message Publishing**: JSON formatting, history support
+          - 📥 **Message Subscription**: Wildcard patterns, group subscriptions
+          - 💾 **JetStream Support**: Streams, consumers, retention policies
+          - 📊 **Real-time Monitoring**: Live filtering, message statistics
+          - 🛠️ **Cross-platform Config**: Persistent settings across platforms
+          
+          ### 🎯 Quick Start / 快速开始
+          1. Download the appropriate file for your platform / 下载适合您平台的文件
+          2. Start NATS server: `docker run -p 4222:4222 nats:latest`
+          3. Run the client and connect to `nats://localhost:4222`
+          
+          ### 📚 Documentation / 文档
+          - **English**: [README_EN.md](README_EN.md) | [Build Guide](docs/BUILD_EN.md)
+          - **中文**: [README.md](README.md) | [构建指南](docs/BUILD.md)
+        files: |
+          nats-client-*
         draft: false
         prerelease: false
-
-    - name: Upload Release Assets
-      run: |
-        for file in nats-client-*; do
-          echo "Uploading $file"
-          curl \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Content-Type: application/octet-stream" \
-            --data-binary @"$file" \
-            "${{ steps.create_release.outputs.upload_url }}?name=$file"
-        done 
+        token: ${{ secrets.GITHUB_TOKEN }} 
