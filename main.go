@@ -150,10 +150,15 @@ type NATSClient struct {
 	// JetStream data
 	streams   []jetstream.StreamInfo
 	consumers []ConsumerInfo
+	// Request-Reply data
+	requestResponses binding.StringList
+	allResponses     []string
+	responseCount    binding.Int
 	// Configuration
-	config        *AppConfig
-	mu            sync.RWMutex
-	refreshJSFunc func()
+	config              *AppConfig
+	mu                  sync.RWMutex
+	refreshJSFunc       func()
+	refreshResponseFunc func()
 }
 
 // ConsumerInfo holds consumer information for display
@@ -171,12 +176,15 @@ func NewNATSClient() *NATSClient {
 	config := loadConfig()
 
 	return &NATSClient{
-		status:        status,
-		messageCount:  binding.NewInt(),
-		subscriptions: make(map[string]*nats.Subscription),
-		messages:      binding.NewStringList(),
-		allMessages:   make([]string, 0),
-		config:        config,
+		status:           status,
+		messageCount:     binding.NewInt(),
+		subscriptions:    make(map[string]*nats.Subscription),
+		messages:         binding.NewStringList(),
+		allMessages:      make([]string, 0),
+		requestResponses: binding.NewStringList(),
+		allResponses:     make([]string, 0),
+		responseCount:    binding.NewInt(),
+		config:           config,
 	}
 }
 
@@ -246,12 +254,43 @@ func (nc *NATSClient) Disconnect() {
 	nc.status.Set("Disconnected")
 }
 
-// Publish sends a message to the specified subject
+// Publish sends a message to a subject
 func (nc *NATSClient) Publish(subject, message string) error {
 	if nc.conn == nil {
-		return fmt.Errorf("not connected")
+		return fmt.Errorf("not connected to NATS server")
 	}
 	return nc.conn.Publish(subject, []byte(message))
+}
+
+// Request sends a request and waits for a response
+func (nc *NATSClient) Request(subject, message string, timeout time.Duration) error {
+	if nc.conn == nil {
+		return fmt.Errorf("not connected to NATS server")
+	}
+
+	// Send request and wait for response
+	msg, err := nc.conn.Request(subject, []byte(message), timeout)
+	if err != nil {
+		// Add error response to output
+		errorMsg := fmt.Sprintf("[%s] REQUEST: %s\nERROR: %v\n%s",
+			time.Now().Format("15:04:05"),
+			subject,
+			err,
+			strings.Repeat("-", 50))
+		nc.addResponse(errorMsg)
+		return err
+	}
+
+	// Add successful response to output
+	responseMsg := fmt.Sprintf("[%s] REQUEST: %s\nRESPONSE FROM: %s\n%s\n%s",
+		time.Now().Format("15:04:05"),
+		subject,
+		msg.Subject,
+		string(msg.Data),
+		strings.Repeat("-", 50))
+	nc.addResponse(responseMsg)
+
+	return nil
 }
 
 // Subscribe subscribes to messages on the specified subject with optional group
@@ -323,6 +362,29 @@ func (nc *NATSClient) addMessage(formattedMsg string) {
 	nc.applyFilterLocked()
 }
 
+// addResponse is a helper to add response to the request-reply list thread-safely
+func (nc *NATSClient) addResponse(formattedMsg string) {
+	nc.mu.Lock()
+	defer nc.mu.Unlock()
+
+	// Add to all responses
+	nc.allResponses = append(nc.allResponses, formattedMsg)
+
+	// Limit to 50 responses
+	if len(nc.allResponses) > 50 {
+		nc.allResponses = nc.allResponses[1:]
+	}
+
+	// Update display
+	nc.requestResponses.Set(nc.allResponses)
+	nc.responseCount.Set(len(nc.allResponses))
+
+	// Trigger UI refresh if available
+	if nc.refreshResponseFunc != nil {
+		go nc.refreshResponseFunc()
+	}
+}
+
 // Unsubscribe removes subscription from the specified subject
 func (nc *NATSClient) Unsubscribe(subKey string) error {
 	nc.mu.Lock()
@@ -358,6 +420,16 @@ func (nc *NATSClient) ClearMessages() {
 	nc.allMessages = make([]string, 0)
 	nc.messages.Set([]string{})
 	nc.messageCount.Set(0)
+}
+
+// ClearResponses clears all responses from the request-reply display
+func (nc *NATSClient) ClearResponses() {
+	nc.mu.Lock()
+	defer nc.mu.Unlock()
+
+	nc.allResponses = make([]string, 0)
+	nc.requestResponses.Set([]string{})
+	nc.responseCount.Set(0)
 }
 
 // SetFilter sets the message filter
@@ -682,7 +754,12 @@ func createPublishTabWithOutput(client *NATSClient, window fyne.Window) *fyne.Co
 	publishControls := createPublishControls(client, window)
 
 	// Publish output area (for request-reply responses)
-	publishOutput := createPublishOutputArea(client)
+	publishOutput, refreshFunc := createPublishOutputArea(client)
+
+	// Set the refresh function in client
+	client.mu.Lock()
+	client.refreshResponseFunc = refreshFunc
+	client.mu.Unlock()
 
 	// Add padding around content for better spacing
 	leftPanel := container.NewPadded(publishControls)
@@ -784,8 +861,28 @@ func createPublishControls(client *NATSClient, window fyne.Window) *fyne.Contain
 		subjectEntry.SetOptions(client.GetSubjectHistory())
 
 		if modeSelect.Selected == "Request-Reply" {
-			// TODO: Implement request-reply functionality
-			dialog.ShowInformation("Info", "Request-reply mode coming soon!", window)
+			// Parse timeout duration
+			timeoutStr := timeoutEntry.Text
+			if timeoutStr == "" {
+				timeoutStr = "5s"
+			}
+
+			timeout, err := time.ParseDuration(timeoutStr)
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("invalid timeout format: %v", err), window)
+				return
+			}
+
+			// Send request and wait for response
+			go func() {
+				err := client.Request(subjectEntry.Text, messageEntry.Text, timeout)
+				if err != nil {
+					// Error is already handled in Request method
+					log.Printf("Request failed: %v", err)
+				}
+			}()
+
+			dialog.ShowInformation("Request Sent", fmt.Sprintf("Request sent to %s", subjectEntry.Text), window)
 		} else {
 			err := client.Publish(subjectEntry.Text, messageEntry.Text)
 			if err != nil {
@@ -811,32 +908,57 @@ func createPublishControls(client *NATSClient, window fyne.Window) *fyne.Contain
 	)
 }
 
-func createPublishOutputArea(client *NATSClient) *fyne.Container {
+func createPublishOutputArea(client *NATSClient) (*fyne.Container, func()) {
 	// Output area for request-reply responses
 	outputList := widget.NewList(
-		func() int { return 0 }, // TODO: Implement publish output messages
+		func() int {
+			length := client.requestResponses.Length()
+			return length
+		},
 		func() fyne.CanvasObject {
 			label := widget.NewLabel("")
 			label.Wrapping = fyne.TextWrapWord
 			return label
 		},
 		func(id widget.ListItemID, obj fyne.CanvasObject) {
-			// TODO: Display request-reply responses
+			label := obj.(*widget.Label)
+			value, err := client.requestResponses.GetValue(id)
+			if err == nil {
+				label.SetText(value)
+			}
 		},
 	)
 
 	clearOutputBtn := widget.NewButton("Clear Output", func() {
-		// TODO: Clear publish output
+		client.ClearResponses()
+		outputList.Refresh()
 	})
+
+	// Response count display
+	responseCountLabel := widget.NewLabel("")
+	responseCountLabel.Bind(binding.IntToStringWithFormat(client.responseCount, "Responses: %d"))
+
+	// Header with count and clear button
+	header := container.NewBorder(
+		nil, nil,
+		responseCountLabel,
+		clearOutputBtn,
+		nil,
+	)
 
 	// Response display card
 	responseCard := container.NewBorder(
-		container.NewBorder(nil, nil, nil, clearOutputBtn),
+		header,
 		nil, nil, nil,
 		container.NewScroll(outputList),
 	)
 
-	return responseCard
+	// Refresh function
+	refreshFunc := func() {
+		outputList.Refresh()
+	}
+
+	return responseCard, refreshFunc
 }
 
 func createSubscribeTabWithOutput(client *NATSClient) *fyne.Container {
