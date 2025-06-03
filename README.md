@@ -8,6 +8,8 @@
 [![Latest Release](https://img.shields.io/github/v/release/gogap/nats-app?style=for-the-badge)](https://github.com/gogap/nats-app/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
+![image](https://gogap.cn/images/nats-app.screenshot.png)
+
 ## 🚀 立即下载使用
 
 ### 下载安装包
